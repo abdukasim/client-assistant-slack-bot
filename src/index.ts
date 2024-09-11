@@ -377,13 +377,32 @@ app.message(async ({ message, logger }) => {
   logger.info("Received unhandled message:", message);
 });
 
+app.message("hello", async ({ message, say }) => {
+  console.log("Received message:", message);
+  if ("user" in message) {
+    try {
+      await say(`Hey there <@${message.user}>!`);
+      console.log("Sent response to 'hello' message");
+    } catch (error) {
+      console.error("Error sending response:", error);
+    }
+  }
+});
+
 // Add a global error handler to catch any errors
 app.error(async (error) => {
   console.error("An error occurred:", error);
 });
 
+expressApp.use(receiver.router);
+
+expressApp.get("/", (req, res) => {
+  res.send("Hello, Slack Bot is running!");
+});
+
 (async () => {
   const port = process.env.PORT || 3000;
   await app.start(port);
+
   console.log(`⚡️ Bolt app is running on port ${port}!`);
 })();
