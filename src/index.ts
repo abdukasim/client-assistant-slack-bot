@@ -6,30 +6,9 @@ import util from "util";
 
 dotenv.config();
 
-const expressApp = express();
-
-expressApp.use(express.json());
-expressApp.use(express.urlencoded({ extended: true }));
-
-// Modify the express route to log incoming requests
-expressApp.post("/", (req, res) => {
-  console.log("Received request:", util.inspect(req.body, false, null, true));
-  if (req.body.type === "url_verification") {
-    res.json({ challenge: req.body.challenge });
-  } else {
-    res.sendStatus(200);
-  }
-});
-
-const receiver = new ExpressReceiver({
-  app: expressApp,
-  signingSecret: process.env.SLACK_SIGNING_SECRET!,
-});
-
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
-  receiver: receiver,
   logLevel: LogLevel.DEBUG,
 });
 
@@ -104,6 +83,7 @@ app.action("use_template", async ({ body, ack, client }) => {
     view: {
       type: "modal",
       callback_id: "template_selection",
+      private_metadata: body?.channel?.id, // Add this line to pass the channel ID
       title: {
         type: "plain_text",
         text: "Select a Template",
@@ -146,8 +126,12 @@ app.view("template_selection", async ({ ack, body, view, client }) => {
   const selectedTemplate =
     view.state.values.template_select.template_choice.selected_option?.value;
   const message = selectedTemplate ? messageTemplates[selectedTemplate] : "";
+
+  // Get the channel ID from the body
+  const channelId = body.view.private_metadata;
+
   await client.chat.postMessage({
-    channel: body.user.id,
+    channel: channelId, // Use the channel ID instead of body.user.id
     text: `Here's your selected template:\n\n${message}\n\nWould you like to revise this message?`,
     blocks: [
       {
@@ -182,6 +166,7 @@ app.action("custom_message", async ({ body, ack, client }) => {
     view: {
       type: "modal",
       callback_id: "custom_message_submission",
+      private_metadata: (body as any).channel.id, // Add this line to pass the channel ID
       title: {
         type: "plain_text",
         text: "Create Custom Message",
@@ -212,9 +197,10 @@ app.action("custom_message", async ({ body, ack, client }) => {
 app.view("custom_message_submission", async ({ ack, body, view, client }) => {
   await ack();
   const message = view.state.values.message_input.message_text.value;
+  const channelId = body.view.private_metadata; // Get the channel ID from private_metadata
   if (message) {
     await client.chat.postMessage({
-      channel: body.user.id,
+      channel: channelId, // Use channelId instead of body.user.id
       text: `Here's your custom message:\n\n${message}\n\nWould you like to revise this message?`,
       blocks: [
         {
@@ -246,6 +232,7 @@ app.view("custom_message_submission", async ({ ack, body, view, client }) => {
 app.action("revise_message", async ({ body, ack, client, action }) => {
   await ack();
   const message = (action as ButtonAction).value;
+  const channelId = (body as any).channel.id; // Get the channel ID from the body
   if (message) {
     try {
       const completion = await openai.chat.completions.create({
@@ -264,10 +251,13 @@ app.action("revise_message", async ({ body, ack, client, action }) => {
       });
 
       const revisedMessage = completion.choices[0]?.message?.content;
+      console.log("====================================");
+      console.log({ revisedMessage });
+      console.log("====================================");
 
       if (revisedMessage) {
         await client.chat.postMessage({
-          channel: (body as any).user.id,
+          channel: channelId, // Use channelId instead of (body as any).user.id
           text: `Here's the revised message:\n\n${revisedMessage}\n\nWould you like to apply a QA checklist?`,
           blocks: [
             {
@@ -295,9 +285,12 @@ app.action("revise_message", async ({ body, ack, client, action }) => {
         });
       }
     } catch (error) {
+      console.log("====================================");
+      console.log({ error });
+      console.log("====================================");
       console.error("Error revising message:", error);
       await client.chat.postMessage({
-        channel: (body as any).user.id,
+        channel: channelId, // Use channelId instead of (body as any).user.id
         text: "Sorry, there was an error revising your message. Please try again.",
       });
     }
@@ -313,6 +306,7 @@ app.action("apply_qa_checklist", async ({ body, ack, client, action }) => {
       view: {
         type: "modal",
         callback_id: "qa_checklist_review",
+        private_metadata: (body as any).channel.id, // Add this line to pass the channel ID
         title: {
           type: "plain_text",
           text: "QA Checklist Review",
@@ -358,6 +352,7 @@ app.action("apply_qa_checklist", async ({ body, ack, client, action }) => {
 
 app.view("qa_checklist_review", async ({ ack, body, view, client }) => {
   await ack();
+  const channelId = body.view.private_metadata; // Get the channel ID from private_metadata
   const checkedItems = Object.values(view.state.values).filter((block) => {
     const firstValue = Object.values(block)[0] as any;
     return (
@@ -367,7 +362,7 @@ app.view("qa_checklist_review", async ({ ack, body, view, client }) => {
   }).length;
 
   await client.chat.postMessage({
-    channel: body.user.id,
+    channel: channelId, // Use channelId instead of body.user.id
     text: `QA Checklist completed. ${checkedItems}/${qaChecklists.general.length} items checked. Your message is ready to be sent.`,
   });
 });
@@ -392,12 +387,6 @@ app.message("hello", async ({ message, say }) => {
 // Add a global error handler to catch any errors
 app.error(async (error) => {
   console.error("An error occurred:", error);
-});
-
-expressApp.use(receiver.router);
-
-expressApp.get("/", (req, res) => {
-  res.send("Hello, Slack Bot is running!");
 });
 
 (async () => {
